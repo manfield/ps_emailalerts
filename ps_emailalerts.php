@@ -92,7 +92,7 @@ class Ps_EmailAlerts extends Module
             !$this->registerHook('displayCustomerAccount') ||
             !$this->registerHook('displayMyAccountBlock') ||
             !$this->registerHook('actionProductDelete') ||
-            !$this->registerHook('actionPaymentConfirmation') ||
+            !$this->registerHook('actionOrderStatusPostUpdate') ||
             !$this->registerHook('actionProductAttributeDelete') ||
             !$this->registerHook('actionProductAttributeUpdate') ||
             !$this->registerHook('actionProductCoverage') ||
@@ -104,16 +104,57 @@ class Ps_EmailAlerts extends Module
         }
 
         if ($delete_params) {
-            Configuration::updateValue('MA_MERCHANT_ORDER', 1);
-            Configuration::updateValue('MA_MERCHANT_INVOICE', 1);
-            Configuration::updateValue('MA_MERCHANT_OOS', 1);
-            Configuration::updateValue('MA_CUSTOMER_QTY', 1);
-            Configuration::updateValue('MA_ORDER_EDIT', 1);
-            Configuration::updateValue('MA_RETURN_SLIP', 1);
-            Configuration::updateValue('MA_MERCHANT_MAILS', Configuration::get('PS_SHOP_EMAIL'));
-            Configuration::updateValue('MA_LAST_QTIES', (int) Configuration::get('PS_LAST_QTIES'));
-            Configuration::updateGlobalValue('MA_MERCHANT_COVERAGE', 0);
-            Configuration::updateGlobalValue('MA_PRODUCT_COVERAGE', 0);
+            
+            $shops = Shop::getContextListShopID();
+            $shop_groups_list = array();
+            
+            /* Setup each shop */
+            foreach ($shops as $shop_id) {
+                $shop_group_id = (int)Shop::getGroupFromShop($shop_id, true);
+                
+                if (!in_array($shop_group_id, $shop_groups_list)) {
+                    $shop_groups_list[] = $shop_group_id;
+                }
+            
+                $res = Configuration::updateValue('MA_MERCHANT_ORDER', true, false, $shop_group_id, $shop_id);
+                $res &= Configuration::updateValue('MA_MERCHANT_INVOICE', false, false, $shop_group_id, $shop_id);;
+                $res &= Configuration::updateValue('MA_MERCHANT_OOS', true, false, $shop_group_id, $shop_id);
+                $res &= Configuration::updateValue('MA_CUSTOMER_QTY', true, false, $shop_group_id, $shop_id);
+                $res &= Configuration::updateValue('MA_ORDER_EDIT', true, false, $shop_group_id, $shop_id);
+                $res &= Configuration::updateValue('MA_RETURN_SLIP', true, false, $shop_group_id, $shop_id);
+                $res &= Configuration::updateValue('MA_MERCHANT_MAILS', Configuration::get('PS_SHOP_EMAIL'), false, $shop_group_id, $shop_id);
+                $res &= Configuration::updateValue('MA_LAST_QTIES', (int) Configuration::get('PS_LAST_QTIES'), false, $shop_group_id, $shop_id);
+                $res &= Configuration::updateGlobalValue('MA_MERCHANT_COVERAGE', false, false, $shop_group_id, $shop_id);
+                $res &= Configuration::updateGlobalValue('MA_PRODUCT_COVERAGE', false, false, $shop_group_id, $shop_id);
+            }
+            
+            /* Sets up Shop Group configuration */
+            if (count($shop_groups_list)) {
+                foreach ($shop_groups_list as $shop_group_id) {
+                    $res &= Configuration::updateValue('MA_MERCHANT_ORDER', true, false, $shop_group_id);
+                    $res &= Configuration::updateValue('MA_MERCHANT_INVOICE', false, false, $shop_group_id);
+                    $res &= Configuration::updateValue('MA_MERCHANT_OOS', true, false, $shop_group_id);
+                    $res &= Configuration::updateValue('MA_CUSTOMER_QTY', true, false, $shop_group_id);
+                    $res &= Configuration::updateValue('MA_ORDER_EDIT', true, false, $shop_group_id);
+                    $res &= Configuration::updateValue('MA_RETURN_SLIP', true, false, $shop_group_id);
+                    $res &= Configuration::updateValue('MA_MERCHANT_MAILS', Configuration::get('PS_SHOP_EMAIL'), false, $shop_group_id);
+                    $res &= Configuration::updateValue('MA_LAST_QTIES', (int) Configuration::get('PS_LAST_QTIES'), false, $shop_group_id);
+                    $res &= Configuration::updateGlobalValue('MA_MERCHANT_COVERAGE', false, false, $shop_group_id);
+                    $res &= Configuration::updateGlobalValue('MA_PRODUCT_COVERAGE', false, false, $shop_group_id);
+                }
+            }
+            
+            /* Sets up Global configuration */
+            $res &= Configuration::updateValue('MA_MERCHANT_ORDER', true);
+            $res &= Configuration::updateValue('MA_MERCHANT_INVOICE', false);
+            $res &= Configuration::updateValue('MA_MERCHANT_OOS', true);
+            $res &= Configuration::updateValue('MA_CUSTOMER_QTY', true);
+            $res &= Configuration::updateValue('MA_ORDER_EDIT', true);
+            $res &= Configuration::updateValue('MA_RETURN_SLIP', true);
+            $res &= Configuration::updateValue('MA_MERCHANT_MAILS', Configuration::get('PS_SHOP_EMAIL'));
+            $res &= Configuration::updateValue('MA_LAST_QTIES', (int) Configuration::get('PS_LAST_QTIES'));
+            $res &= Configuration::updateGlobalValue('MA_MERCHANT_COVERAGE', false);
+            $res &= Configuration::updateGlobalValue('MA_PRODUCT_COVERAGE', false);
 
             $sql = 'CREATE TABLE IF NOT EXISTS `'._DB_PREFIX_.MailAlert::$definition['table'].'`
 				(
@@ -131,7 +172,7 @@ class Ps_EmailAlerts extends Module
             }
         }
 
-        return true;
+        return (bool)$res;
     }
 
     public function uninstall($delete_params = true)
@@ -182,13 +223,62 @@ class Ps_EmailAlerts extends Module
     protected function postProcess()
     {
         $errors = array();
-
+        
+        $shop_context = Shop::getContext();
+        $context_id_shop = (int)$this->context->shop->id;
+        $context_id_shop_group = (int)Shop::getContextShopGroupID();
+        $res = true;
+        
         if (Tools::isSubmit('submitMailAlert')) {
-            if (!Configuration::updateValue('MA_CUSTOMER_QTY', (int) Tools::getValue('MA_CUSTOMER_QTY'))) {
-                $errors[] = $this->trans('Cannot update settings', array(), 'Modules.Mailalerts.Admin');
-            } elseif (!Configuration::updateGlobalValue('MA_ORDER_EDIT', (int) Tools::getValue('MA_ORDER_EDIT'))) {
-                $errors[] = $this->trans('Cannot update settings', array(), 'Modules.Mailalerts.Admin');
+            
+            switch($shop_context) {
+                case Shop::CONTEXT_GROUP:
+                    $res &= Configuration::updateValue(
+                        'MA_CUSTOMER_QTY',
+                        (int) Tools::getValue('MA_CUSTOMER_QTY'),
+                        false,
+                        $context_id_shop_group
+                    );
+                    $res &= Configuration::updateValue(
+                        'MA_ORDER_EDIT',
+                        (int) Tools::getValue('MA_ORDER_EDIT'),
+                        false,
+                        $context_id_shop_group
+                    );
+                    break;
+                case Shop::CONTEXT_SHOP:
+                    $res &= Configuration::updateValue(
+                        'MA_CUSTOMER_QTY',
+                        (int) Tools::getValue('MA_CUSTOMER_QTY'),
+                        false,
+                        $context_id_shop_group,
+                        $context_id_shop
+                    );
+                    $res &= Configuration::updateValue(
+                        'MA_ORDER_EDIT',
+                        (int) Tools::getValue('MA_ORDER_EDIT'),
+                        false,
+                        $context_id_shop_group,
+                        $context_id_shop
+                    );
+                    break;
+                default:
+                    $res &= Configuration::updateValue(
+                        'MA_CUSTOMER_QTY',
+                        (int) Tools::getValue('MA_CUSTOMER_QTY')
+                    );
+                    $res &= Configuration::updateValue(
+                        'MA_ORDER_EDIT',
+                        (int) Tools::getValue('MA_ORDER_EDIT')
+                    );
+                }
             }
+             
+            if (!$res) {
+                $errors[] = $this->trans('Cannot update settings', array(), 'Modules.Mailalerts.Admin');
+            }   
+            
+            
         } elseif (Tools::isSubmit('submitMAMerchant')) {
             $emails = (string) Tools::getValue('MA_MERCHANT_MAILS');
 
@@ -210,24 +300,155 @@ class Ps_EmailAlerts extends Module
                 }
 
                 $emails = implode(self::__MA_MAIL_DELIMITOR__, $emails);
-
-                if (!Configuration::updateValue('MA_MERCHANT_MAILS', (string) $emails)) {
-                    $errors[] = $this->trans('Cannot update settings', array(), 'Modules.Mailalerts.Admin');
-                } elseif (!Configuration::updateValue('MA_MERCHANT_ORDER', (int) Tools::getValue('MA_MERCHANT_ORDER'))) {
-                    $errors[] = $this->trans('Cannot update settings', array(), 'Modules.Mailalerts.Admin');
-                } elseif (!Configuration::updateValue('MA_MERCHANT_INVOICE', (int) Tools::getValue('MA_MERCHANT_INVOICE'))) {
-                    $errors[] = $this->trans('Cannot update settings', array(), 'Modules.Mailalerts.Admin');
-                }elseif (!Configuration::updateValue('MA_MERCHANT_OOS', (int) Tools::getValue('MA_MERCHANT_OOS'))) {
-                    $errors[] = $this->trans('Cannot update settings', array(), 'Modules.Mailalerts.Admin');
-                } elseif (!Configuration::updateValue('MA_LAST_QTIES', (int) Tools::getValue('MA_LAST_QTIES'))) {
-                    $errors[] = $this->trans('Cannot update settings', array(), 'Modules.Mailalerts.Admin');
-                } elseif (!Configuration::updateGlobalValue('MA_MERCHANT_COVERAGE', (int) Tools::getValue('MA_MERCHANT_COVERAGE'))) {
-                    $errors[] = $this->trans('Cannot update settings', array(), 'Modules.Mailalerts.Admin');
-                } elseif (!Configuration::updateGlobalValue('MA_PRODUCT_COVERAGE', (int) Tools::getValue('MA_PRODUCT_COVERAGE'))) {
-                    $errors[] = $this->trans('Cannot update settings', array(), 'Modules.Mailalerts.Admin');
-                } elseif (!Configuration::updateGlobalValue('MA_RETURN_SLIP', (int) Tools::getValue('MA_RETURN_SLIP'))) {
-                    $errors[] = $this->trans('Cannot update settings', array(), 'Modules.Mailalerts.Admin');
+                
+                
+                switch($shop_context) {
+                    case Shop::CONTEXT_GROUP:
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_MAILS',
+                            (string) $emails,
+                            false,
+                            $context_id_shop_group
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_ORDER',
+                            (int) Tools::getValue('MA_MERCHANT_ORDER'),
+                            false,
+                            $context_id_shop_group
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_INVOICE',
+                            (int) Tools::getValue('MA_MERCHANT_INVOICE'),
+                            false,
+                            $context_id_shop_group
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_OOS',
+                            (int) Tools::getValue('MA_MERCHANT_OOS'),
+                            false,
+                            $context_id_shop_group
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_LAST_QTIES',
+                            (int) Tools::getValue('MA_LAST_QTIES'),
+                            false,
+                            $context_id_shop_group
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_COVERAGE',
+                            (int) Tools::getValue('MA_MERCHANT_COVERAGE'),
+                            false,
+                            $context_id_shop_group
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_PRODUCT_COVERAGE',
+                            (int) Tools::getValue('MA_PRODUCT_COVERAGE'),
+                            false,
+                            $context_id_shop_group
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_RETURN_SLIP',
+                            (int) Tools::getValue('MA_RETURN_SLIP'),
+                            false,
+                            $context_id_shop_group
+                        );
+                        break;
+                    case Shop::CONTEXT_SHOP:
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_MAILS',
+                            (string) $emails,
+                            false,
+                            $context_id_shop_group,
+                            $context_id_shop
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_ORDER',
+                            (int) Tools::getValue('MA_MERCHANT_ORDER'),
+                            false,
+                            $context_id_shop_group,
+                            $context_id_shop
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_INVOICE',
+                            (int) Tools::getValue('MA_MERCHANT_INVOICE'),
+                            false,
+                            $context_id_shop_group,
+                            $context_id_shop
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_OOS',
+                            (int) Tools::getValue('MA_MERCHANT_OOS'),
+                            false,
+                            $context_id_shop_group,
+                            $context_id_shop
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_LAST_QTIES',
+                            (int) Tools::getValue('MA_LAST_QTIES'),
+                            false,
+                            $context_id_shop_group,
+                            $context_id_shop
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_COVERAGE',
+                            (int) Tools::getValue('MA_MERCHANT_COVERAGE'),
+                            false,
+                            $context_id_shop_group,
+                            $context_id_shop
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_PRODUCT_COVERAGE',
+                            (int) Tools::getValue('MA_PRODUCT_COVERAGE'),
+                            false,
+                            $context_id_shop_group,
+                            $context_id_shop
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_RETURN_SLIP',
+                            (int) Tools::getValue('MA_RETURN_SLIP'),
+                            false,
+                            $context_id_shop_group,
+                            $context_id_shop
+                        );
+                        break;
+                    default:
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_MAILS',
+                            (string) $emails
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_ORDER',
+                            (int) Tools::getValue('MA_MERCHANT_ORDER')
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_INVOICE',
+                            (int) Tools::getValue('MA_MERCHANT_INVOICE')
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_OOS',
+                            (int) Tools::getValue('MA_MERCHANT_OOS')
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_LAST_QTIES',
+                            (int) Tools::getValue('MA_LAST_QTIES')
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_MERCHANT_COVERAGE',
+                            (int) Tools::getValue('MA_MERCHANT_COVERAGE')
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_PRODUCT_COVERAGE',
+                            (int) Tools::getValue('MA_PRODUCT_COVERAGE')
+                        );
+                        $res &= Configuration::updateValue(
+                            'MA_RETURN_SLIP',
+                            (int) Tools::getValue('MA_RETURN_SLIP')
+                        );
+                    }
                 }
+                if (!$res) {
+                    $errors[] = $this->trans('Cannot update settings', array(), 'Modules.Mailalerts.Admin');
+                }   
             }
         }
 
@@ -1011,6 +1232,7 @@ class Ps_EmailAlerts extends Module
 
     public function renderForm()
     {
+               
         $fields_form_1 = array(
             'form' => array(
                 'legend' => array(
@@ -1229,17 +1451,20 @@ class Ps_EmailAlerts extends Module
 
     public function getConfigFieldsValues()
     {
+        $context_id_shop = (int)$this->context->shop->id;
+        $context_id_shop_group = (int)Shop::getContextShopGroupID();
+        
         return array(
-            'MA_CUSTOMER_QTY' => Tools::getValue('MA_CUSTOMER_QTY', Configuration::get('MA_CUSTOMER_QTY')),
-            'MA_MERCHANT_ORDER' => Tools::getValue('MA_MERCHANT_ORDER', Configuration::get('MA_MERCHANT_ORDER')),
-            'MA_MERCHANT_INVOICE' => Tools::getValue('MA_MERCHANT_INVOICE', Configuration::get('MA_MERCHANT_INVOICE')),
-            'MA_MERCHANT_OOS' => Tools::getValue('MA_MERCHANT_OOS', Configuration::get('MA_MERCHANT_OOS')),
-            'MA_LAST_QTIES' => Tools::getValue('MA_LAST_QTIES', Configuration::get('MA_LAST_QTIES')),
-            'MA_MERCHANT_COVERAGE' => Tools::getValue('MA_MERCHANT_COVERAGE', Configuration::get('MA_MERCHANT_COVERAGE')),
-            'MA_PRODUCT_COVERAGE' => Tools::getValue('MA_PRODUCT_COVERAGE', Configuration::get('MA_PRODUCT_COVERAGE')),
-            'MA_MERCHANT_MAILS' => Tools::getValue('MA_MERCHANT_MAILS', Configuration::get('MA_MERCHANT_MAILS')),
-            'MA_ORDER_EDIT' => Tools::getValue('MA_ORDER_EDIT', Configuration::get('MA_ORDER_EDIT')),
-            'MA_RETURN_SLIP' => Tools::getValue('MA_RETURN_SLIP', Configuration::get('MA_RETURN_SLIP')),
+            'MA_CUSTOMER_QTY' => Tools::getValue('MA_CUSTOMER_QTY', Configuration::get('MA_CUSTOMER_QTY'),$context_id_shop_group,$context_id_shop),
+            'MA_MERCHANT_ORDER' => Tools::getValue('MA_MERCHANT_ORDER', Configuration::get('MA_MERCHANT_ORDER'),$context_id_shop_group,$context_id_shop),
+            'MA_MERCHANT_INVOICE' => Tools::getValue('MA_MERCHANT_INVOICE', Configuration::get('MA_MERCHANT_INVOICE'),$context_id_shop_group,$context_id_shop),
+            'MA_MERCHANT_OOS' => Tools::getValue('MA_MERCHANT_OOS', Configuration::get('MA_MERCHANT_OOS'),$context_id_shop_group,$context_id_shop),
+            'MA_LAST_QTIES' => Tools::getValue('MA_LAST_QTIES', Configuration::get('MA_LAST_QTIES'),$context_id_shop_group,$context_id_shop),
+            'MA_MERCHANT_COVERAGE' => Tools::getValue('MA_MERCHANT_COVERAGE', Configuration::get('MA_MERCHANT_COVERAGE'),$context_id_shop_group,$context_id_shop),
+            'MA_PRODUCT_COVERAGE' => Tools::getValue('MA_PRODUCT_COVERAGE', Configuration::get('MA_PRODUCT_COVERAGE'),$context_id_shop_group,$context_id_shop),
+            'MA_MERCHANT_MAILS' => Tools::getValue('MA_MERCHANT_MAILS', Configuration::get('MA_MERCHANT_MAILS'),$context_id_shop_group,$context_id_shop),
+            'MA_ORDER_EDIT' => Tools::getValue('MA_ORDER_EDIT', Configuration::get('MA_ORDER_EDIT'),$context_id_shop_group,$context_id_shop),
+            'MA_RETURN_SLIP' => Tools::getValue('MA_RETURN_SLIP', Configuration::get('MA_RETURN_SLIP'),$context_id_shop_group,$context_id_shop),
         );
     }
 }
